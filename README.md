@@ -5,7 +5,6 @@ A macOS menu-bar app that replaces the system keyboard-layout switcher with a lo
 - Works with the shortcuts you already use (⌃Space, ⌃⌥Space, 🌐 Globe key), and you can add your own.
 - Flags are picked automatically, e.g. *Slovak – QWERTY* → 🇸🇰, *British* → 🇬🇧, *Finnish* → 🇫🇮.
 - Optionally stays out of the way while you type in a text field.
-- Plays nicely with hold-to-talk dictation apps like Wispr Flow.
 
 Requires macOS 14 (Sonoma) or newer, on Apple Silicon or Intel.
 
