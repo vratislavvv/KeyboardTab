@@ -1,12 +1,16 @@
 import AppKit
 import ApplicationServices
 import Carbon
-import ServiceManagement
+import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let switcher = Switcher()
+    private let settingsWindow = SettingsWindowController()
     private var statusItem: NSStatusItem!
     private var permissionTimer: Timer?
+    private var syncTimer: Timer?
+    private var settingsObserver: AnyCancellable?
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ note: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -20,26 +24,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
             object: nil, suspensionBehavior: .deliverImmediately)
 
-        SystemShortcuts.setEnabled(false)
-        for sig in [SIGINT, SIGTERM, SIGHUP] {
-            signal(sig) { _ in SystemShortcuts.setEnabled(true); exit(0) }
+        // macOS's own ⌃Space-style shortcuts are switched off while KeyboardTab handles them,
+        // so only one switcher appears. Re-applied whenever the shortcut list changes.
+        let settings = AppSettings.shared
+        applyTakeOver()
+        settingsObserver = settings.objectWillChange.sink { [weak self] in
+            DispatchQueue.main.async { self?.applyTakeOver() }
+        }
+        // Pick up changes made in System Settings (or by other apps) while running.
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            settings.refreshSystemShortcuts()
+        }
+        // Quit cleanly (restoring macOS's shortcuts) when killed from Terminal / Activity Monitor.
+        signalSources = [SIGINT, SIGTERM, SIGHUP].map { sig in
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { NSApp.terminate(nil) }
+            source.resume()
+            return source
         }
 
         startTapWhenTrusted()
+
+        if !UserDefaults.standard.bool(forKey: "launchedBefore") {
+            UserDefaults.standard.set(true, forKey: "launchedBefore")
+            openSettings()
+        }
+    }
+
+    private func applyTakeOver() {
+        let settings = AppSettings.shared
+        // Without the keyboard hook KeyboardTab can't switch anything, so leave macOS's shortcuts alone.
+        let takenOver = switcher.isActive ? Set(settings.takenOverSystemShortcuts.compactMap(\.hotkeyID)) : []
+        SystemShortcuts.apply(enabledInSettings: Set(settings.systemShortcuts.compactMap(\.hotkeyID)),
+                              takenOver: takenOver)
+        if switcher.isActive && settings.shortcuts.contains(.globe) {
+            GlobeKeySetting.takeOver()
+        } else {
+            GlobeKeySetting.giveBack()
+        }
     }
 
     func applicationWillTerminate(_ note: Notification) {
-        SystemShortcuts.setEnabled(true)
+        SystemShortcuts.restore()
+        GlobeKeySetting.giveBack()
+    }
+
+    /// Opening the app again (Finder, Spotlight, Launchpad) while it's running shows Settings.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        openSettings()
+        return false
     }
 
     // MARK: Accessibility permission
 
     private func startTapWhenTrusted() {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        if AXIsProcessTrustedWithOptions(opts), switcher.installTap() { return }
+        if AXIsProcessTrustedWithOptions(opts), switcher.installTap() { applyTakeOver(); return }
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
             guard let self, AXIsProcessTrusted(), self.switcher.installTap() else { return }
             t.invalidate()
+            self.applyTakeOver()
             self.refreshStatusTitle()
         }
     }
@@ -65,24 +110,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         if !AXIsProcessTrusted() {
-            let warn = NSMenuItem(title: "Grant Accessibility Access…", action: #selector(openAccessibility), keyEquivalent: "")
+            let warn = NSMenuItem(title: "⚠️ Grant Accessibility Access…", action: #selector(openSettings), keyEquivalent: "")
             warn.target = self
             menu.addItem(warn)
         }
 
-        let hint = NSMenuItem(title: "Switch with ⌃Space (hold ⌃, tap Space)", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        menu.addItem(hint)
-
-        let globe = NSMenuItem(title: "Also Use 🌐 Globe Key", action: #selector(toggleGlobe), keyEquivalent: "")
-        globe.target = self
-        globe.state = switcher.globeEnabled ? .on : .off
-        menu.addItem(globe)
-
-        let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLogin), keyEquivalent: "")
-        login.target = self
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(login)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit KeyboardTab", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -93,37 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         InputSources.all().first { $0.id == id }?.select()
     }
 
-    @objc private func openAccessibility() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-    }
-
-    @objc private func toggleGlobe() {
-        switcher.globeEnabled.toggle()
-        guard switcher.globeEnabled else { return }
-        let fnUsage = UserDefaults(suiteName: "com.apple.HIToolbox")?.object(forKey: "AppleFnUsageType") as? Int
-        if fnUsage != 0 {
-            let alert = NSAlert()
-            alert.messageText = "Set the 🌐 key to “Do Nothing”"
-            alert.informativeText = "So macOS doesn't show its own switcher too, open System Settings → Keyboard and set “Press 🌐 key to” → “Do Nothing”."
-            alert.addButton(withTitle: "Open Keyboard Settings")
-            alert.addButton(withTitle: "Later")
-            NSApp.activate()
-            if alert.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
-            }
-        }
-    }
-
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            NSAlert(error: error).runModal()
-        }
+    @objc private func openSettings() {
+        settingsWindow.show()
     }
 }
-

@@ -8,8 +8,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp Info.plist "$APP/Contents/Info.plist"
 
-swiftc -O -target arm64-apple-macos14 -o "$APP/Contents/MacOS/KeyboardTab-arm64" Sources/*.swift
-swiftc -O -target x86_64-apple-macos14 -o "$APP/Contents/MacOS/KeyboardTab-x86_64" Sources/*.swift
+swiftc -O -swift-version 5 -target arm64-apple-macos14 -o "$APP/Contents/MacOS/KeyboardTab-arm64" Sources/*.swift
+swiftc -O -swift-version 5 -target x86_64-apple-macos14 -o "$APP/Contents/MacOS/KeyboardTab-x86_64" Sources/*.swift
 lipo -create -output "$APP/Contents/MacOS/KeyboardTab" "$APP"/Contents/MacOS/KeyboardTab-*
 rm "$APP"/Contents/MacOS/KeyboardTab-*
 

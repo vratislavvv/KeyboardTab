@@ -2,33 +2,56 @@ import AppKit
 import Carbon
 
 // Private SkyLight API (also used by AltTab) to temporarily turn off the system's
-// own ⌃Space / ⌃⌥Space input-source shortcuts so only our switcher reacts.
+// own input-source shortcuts so only our switcher reacts.
 // The change is not persisted — it lasts only while this app is running.
 @_silgen_name("CGSSetSymbolicHotKeyEnabled")
 @discardableResult
 private func CGSSetSymbolicHotKeyEnabled(_ hotKey: Int32, _ enabled: Bool) -> Int32
 
 enum SystemShortcuts {
-    static let ids: [Int32] = [60, 61]  // 60 = select previous source (⌃Space), 61 = next (⌃⌥Space)
-    static func setEnabled(_ on: Bool) { ids.forEach { CGSSetSymbolicHotKeyEnabled($0, on) } }
+    static let ids: [Int32] = [60, 61]  // 60 = select previous source, 61 = select next source
+
+    /// Each system shortcut is live exactly when System Settings has it on and KeyboardTab
+    /// isn't handling it. (Only the live state changes; System Settings is never written.)
+    static func apply(enabledInSettings: Set<Int32>, takenOver: Set<Int32>) {
+        for id in ids {
+            CGSSetSymbolicHotKeyEnabled(id, enabledInSettings.contains(id) && !takenOver.contains(id))
+        }
+    }
+
+    /// On quit: back to exactly what System Settings says.
+    static func restore() {
+        let enabled = Set(AppSettings.detectSystemShortcuts().compactMap(\.hotkeyID))
+        apply(enabledInSettings: enabled, takenOver: [])
+    }
 }
 
 final class Switcher {
-    private enum Mode { case none, control, globe }
+    private enum Mode {
+        case none
+        case hold(Shortcut)  // panel open while the shortcut's modifiers are held (AltTab-style)
+        case tap             // each press switches immediately; panel fades out afterwards
+    }
 
+    private let settings = AppSettings.shared
     private let hud = HUDPanel()
     private var mode = Mode.none
     private var items: [InputSource] = []
     private var index = 0
     private var hideTimer: Timer?
-    private var fnDown = false
-    private var fnUsedAsModifier = false
-    private var tap: CFMachPort?
 
-    var globeEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: "globeEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "globeEnabled") }
-    }
+    // 🌐 Globe key: a quick tap switches layouts; holding it (e.g. Wispr Flow's hold-to-talk)
+    // or using it with another key does not.
+    private enum GlobeState { case idle, tapCandidate, usedWithOtherKey, held }
+    private var globeState = GlobeState.idle
+    private var globeSwallowed = false
+    private var globeTimer: Timer?
+    private var globeDownEvent: CGEvent?
+    private let globeHoldDelay = 0.3
+    private static let syntheticMarker: Int64 = 0x4B54_4142  // marks events we re-post ourselves
+    private var tap: CFMachPort?
+    /// True once the keyboard hook runs (needs Accessibility access).
+    var isActive: Bool { tap != nil }
 
     // MARK: Event tap
 
@@ -56,10 +79,13 @@ final class Switcher {
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
+        if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker { return pass }
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return pass
+        case _ where settings.isRecording:
+            return pass  // let the settings window see the keys
         case .flagsChanged:
             return handleFlags(event) ? nil : pass
         case .keyDown, .keyUp:
@@ -69,74 +95,138 @@ final class Switcher {
         }
     }
 
+    private func modifiers(_ e: CGEvent) -> NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: UInt(e.flags.rawValue)).intersection(Shortcut.relevant)
+    }
+
     /// Returns true when the event should be swallowed.
     private func handleKey(_ e: CGEvent, down: Bool) -> Bool {
         let code = Int(e.getIntegerValueField(.keyboardEventKeycode))
-        let flags = e.flags
-        if down && fnDown { fnUsedAsModifier = true }
+        let flags = modifiers(e)
+        if down && globeState == .tapCandidate { globeUsedWithOtherKey() }
 
-        if mode == .control {
+        if case .hold(let sc) = mode {
             switch code {
-            case kVK_Space:
-                if down { move(flags.contains(.maskShift) ? -1 : 1) }
-                return true
-            case kVK_Escape:
-                if down { finish(commit: false) }
-                return true
-            case kVK_Return, kVK_ANSI_KeypadEnter:
-                if down { finish(commit: true) }
-                return true
-            case kVK_UpArrow, kVK_LeftArrow:
-                if down { move(-1) }
-                return true
-            case kVK_DownArrow, kVK_RightArrow:
-                if down { move(1) }
-                return true
-            default:
-                return false
+            case sc.keyCode:
+                let backwards = flags.contains(.shift) && !sc.flags.contains(.shift)
+                if down { move(backwards ? -1 : 1) }
+            case kVK_Escape: if down { finish(commit: false) }
+            case kVK_Return, kVK_ANSI_KeypadEnter: if down { finish(commit: true) }
+            case kVK_UpArrow, kVK_LeftArrow: if down { move(-1) }
+            case kVK_DownArrow, kVK_RightArrow: if down { move(1) }
+            default: return false
             }
-        }
-
-        // ⌃Space or ⌃⌥Space (no ⌘) opens the switcher.
-        if down, code == kVK_Space, flags.contains(.maskControl), !flags.contains(.maskCommand) {
-            begin(.control, step: flags.contains(.maskShift) ? -1 : 1)
             return true
         }
+
+        guard let (sc, step) = match(code: code, flags: flags) else { return false }
+        let isRepeat = e.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        if down && !isRepeat { trigger(sc, step: step) }
+        return true
+    }
+
+    /// Finds the shortcut for this key. Holding ⇧ in addition means "go backwards".
+    private func match(code: Int, flags: NSEvent.ModifierFlags) -> (Shortcut, Int)? {
+        for sc in settings.shortcuts where !sc.isGlobe && sc.keyCode == code {
+            if flags == sc.flags { return (sc, 1) }
+            if !sc.flags.contains(.shift), flags == sc.flags.union(.shift) { return (sc, -1) }
+        }
+        return nil
+    }
+
+    /// Returns true when the event should be swallowed.
+    private func handleFlags(_ e: CGEvent) -> Bool {
+        let code = Int(e.getIntegerValueField(.keyboardEventKeycode))
+
+        if case .hold(let sc) = mode, !modifiers(e).contains(sc.holdFlags) {
+            finish(commit: true)
+        }
+        if code == kVK_Function { return handleGlobe(e) }
+        if globeState == .tapCandidate { globeUsedWithOtherKey() }  // 🌐 + another modifier
         return false
     }
 
-    private func handleFlags(_ e: CGEvent) -> Bool {
-        let code = Int(e.getIntegerValueField(.keyboardEventKeycode))
-        let flags = e.flags
+    private func handleGlobe(_ e: CGEvent) -> Bool {
+        guard settings.shortcuts.contains(.globe) else { globeState = .idle; return false }
 
-        if mode == .control && !flags.contains(.maskControl) {
-            finish(commit: true)
-        }
-
-        if code == kVK_Function && globeEnabled {
-            if flags.contains(.maskSecondaryFn) {
-                fnDown = true
-                fnUsedAsModifier = false
-            } else if fnDown {
-                fnDown = false
-                if !fnUsedAsModifier { globeTapped() }
+        if e.flags.contains(.maskSecondaryFn) {
+            // Normally KeyboardTab sets macOS's 🌐 action to "Do Nothing", so the press can pass
+            // through untouched. If macOS would still react, hide the press from it until we
+            // know it's a hold rather than a tap.
+            globeSwallowed = GlobeKeySetting.current != GlobeKeySetting.doNothing
+            globeState = .tapCandidate
+            globeDownEvent = e.copy()
+            globeTimer?.invalidate()
+            globeTimer = Timer.scheduledTimer(withTimeInterval: globeHoldDelay, repeats: false) { [weak self] _ in
+                self?.globeHeld()
             }
-        } else if fnDown, code != kVK_Function {
-            fnUsedAsModifier = true  // fn + another modifier
+            return globeSwallowed
         }
-        return false
+
+        // Released.
+        globeTimer?.invalidate()
+        let state = globeState
+        globeState = .idle
+        switch state {
+        case .tapCandidate:
+            trigger(.globe, step: 1)  // quick tap → switch layout
+            return globeSwallowed
+        case .usedWithOtherKey:
+            return globeSwallowed  // keep press/release consistent for whoever saw (or didn't see) the press
+        case .held, .idle:
+            return false
+        }
+    }
+
+    /// 🌐 held longer than a tap: not ours. If we hid the press, hand it on now.
+    private func globeHeld() {
+        guard globeState == .tapCandidate else { return }
+        globeState = .held
+        guard globeSwallowed, let event = globeDownEvent else { return }
+        event.setIntegerValueField(.eventSourceUserData, value: Self.syntheticMarker)
+        event.post(tap: .cgSessionEventTap)
+    }
+
+    /// 🌐 used as a modifier (🌐+arrow, 🌐+F…): not a tap.
+    private func globeUsedWithOtherKey() {
+        globeTimer?.invalidate()
+        globeState = .usedWithOtherKey
     }
 
     // MARK: Switching
 
+    private func trigger(_ sc: Shortcut, step: Int) {
+        if case .tap = mode {
+            move(step)
+            selectAndScheduleHide()
+            return
+        }
+        if settings.onlyWhenNoTextField && TextFocus.isTextInputFocused() {
+            switchSilently(step)
+            return
+        }
+        if sc.isGlobe || sc.holdFlags.isEmpty {
+            begin(.tap, step: step)
+            selectAndScheduleHide()
+        } else {
+            begin(.hold(sc), step: step)
+        }
+    }
+
     private func begin(_ newMode: Mode, step: Int) {
         items = InputSources.all()
         guard items.count > 1 else { return }
-        let current = items.firstIndex { $0.id == InputSources.currentID() } ?? 0
-        index = wrap(current + step)
+        index = wrap(currentIndex() + step)
         mode = newMode
         hideTimer?.invalidate()
         hud.show(items: items, selected: index)
+    }
+
+    /// Used while typing in a text field: switch straight away, no panel.
+    private func switchSilently(_ step: Int) {
+        items = InputSources.all()
+        guard items.count > 1 else { return }
+        items[wrap(currentIndex() + step)].select()
     }
 
     private func move(_ step: Int) {
@@ -151,23 +241,20 @@ final class Switcher {
         hud.dismiss()
     }
 
-    /// Globe key behaves like the system one: each tap switches immediately
-    /// and the panel fades out shortly after the last tap.
-    private func globeTapped() {
-        if mode == .globe {
-            move(1)
-        } else {
-            if mode == .control { finish(commit: false) }
-            begin(.globe, step: 1)
-        }
-        guard mode == .globe, items.indices.contains(index) else { return }
+    private func selectAndScheduleHide() {
+        guard case .tap = mode, items.indices.contains(index) else { return }
         items[index].select()
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: 0.9, repeats: false) { [weak self] _ in
-            guard let self, self.mode == .globe else { return }
+            guard let self, case .tap = self.mode else { return }
             self.mode = .none
             self.hud.dismiss()
         }
+    }
+
+    private func currentIndex() -> Int {
+        let current = InputSources.currentID()
+        return items.firstIndex { $0.id == current } ?? 0
     }
 
     private func wrap(_ i: Int) -> Int { ((i % items.count) + items.count) % items.count }

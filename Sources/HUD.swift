@@ -20,10 +20,9 @@ final class HUDPanel: NSPanel {
         blur.blendingMode = .behindWindow
         blur.state = .active
         blur.appearance = NSAppearance(named: .vibrantLight)
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = HUDListView.cornerRadius
-        blur.layer?.cornerCurve = .continuous
-        blur.layer?.masksToBounds = true
+        // A mask image (not a layer corner radius) is what the window server uses for the
+        // shape and shadow of a borderless window, so the corners stay truly transparent.
+        blur.maskImage = HUDPanel.roundedMask(radius: HUDListView.cornerRadius)
 
         listView.autoresizingMask = [.width, .height]
         blur.addSubview(listView)
@@ -42,6 +41,20 @@ final class HUDPanel: NSPanel {
         listView.needsDisplay = true
         alphaValue = 1
         orderFrontRegardless()
+        invalidateShadow()
+    }
+
+    /// Stretchable rounded-rect mask: only the straight middle part stretches.
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let side = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     func update(selected: Int) {
@@ -102,7 +115,7 @@ final class HUDListView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         // Slight gray tint like the system HUD.
         NSColor(white: 0.55, alpha: 0.25).setFill()
-        bounds.fill()
+        NSBezierPath(roundedRect: bounds, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius).fill()
 
         for (i, item) in items.enumerated() {
             let row = NSRect(x: padding, y: padding + CGFloat(i) * rowHeight,
