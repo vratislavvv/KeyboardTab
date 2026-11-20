@@ -30,7 +30,6 @@ struct SettingsView: View {
     @State private var message: String?
     @State private var trusted = AXIsProcessTrusted()
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    private let poll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
@@ -119,8 +118,19 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onReceive(poll) { _ in trusted = AXIsProcessTrusted() }
+        .task {
+            // Keep the Accessibility status current while the window is open.
+            while !Task.isCancelled {
+                trusted = AXIsProcessTrusted()
+                try? await Task.sleep(for: .seconds(1.5))
+            }
+        }
         .onDisappear(perform: stopRecording)
+    }
+
+    /// macOS shortcuts the user removed from the list (macOS handles them again).
+    private var returnedShortcuts: [Shortcut] {
+        settings.systemShortcuts.map(\.shortcut).filter { !settings.shortcuts.contains($0) }
     }
 
     // MARK: Recording
@@ -157,11 +167,6 @@ struct SettingsView: View {
     }
 
     // MARK: Actions
-
-    /// macOS shortcuts the user removed and that are still set up in macOS.
-    private var returnedShortcuts: [Shortcut] {
-        settings.systemShortcuts.map(\.shortcut).filter { !settings.shortcuts.contains($0) }
-    }
 
     private func setLaunchAtLogin(_ on: Bool) {
         do {

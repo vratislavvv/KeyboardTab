@@ -62,19 +62,16 @@ final class HUDPanel: NSPanel {
         listView.needsDisplay = true
     }
 
-    func dismiss(animated: Bool = true) {
+    /// Fades out. If the panel is shown again during the fade, it stays.
+    func dismiss() {
         guard isVisible else { return }
-        if animated {
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.15
-                animator().alphaValue = 0
-            }, completionHandler: { [weak self] in
-                guard let self, self.alphaValue == 0 else { return }
-                self.orderOut(nil)
-            })
-        } else {
-            orderOut(nil)
-        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, self.alphaValue == 0 else { return }
+            self.orderOut(nil)
+        })
     }
 }
 
@@ -100,14 +97,15 @@ final class HUDListView: NSView {
 
     private var flagAttrs: [NSAttributedString.Key: Any] { [.font: NSFont.systemFont(ofSize: 28)] }
 
-    private func contentWidth(_ item: InputSource, selected: Bool) -> CGFloat {
+    /// Width of flag + name, measured in the (larger) selected style.
+    private func contentWidth(_ item: InputSource) -> CGFloat {
         let flag = (item.flag as NSString).size(withAttributes: flagAttrs).width
-        let text = (item.name as NSString).size(withAttributes: attrs(selected: selected)).width
+        let text = (item.name as NSString).size(withAttributes: attrs(selected: true)).width
         return flag + flagGap + text
     }
 
     func preferredSize() -> NSSize {
-        let widest = items.map { contentWidth($0, selected: true) }.max() ?? 0
+        let widest = items.map(contentWidth).max() ?? 0
         let width = max(minWidth, ceil(widest) + 2 * (padding + textInset))
         return NSSize(width: width, height: CGFloat(items.count) * rowHeight + 2 * padding)
     }

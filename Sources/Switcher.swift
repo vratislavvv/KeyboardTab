@@ -1,31 +1,6 @@
 import AppKit
 import Carbon
 
-// Private SkyLight API (also used by AltTab) to temporarily turn off the system's
-// own input-source shortcuts so only our switcher reacts.
-// The change is not persisted — it lasts only while this app is running.
-@_silgen_name("CGSSetSymbolicHotKeyEnabled")
-@discardableResult
-private func CGSSetSymbolicHotKeyEnabled(_ hotKey: Int32, _ enabled: Bool) -> Int32
-
-enum SystemShortcuts {
-    static let ids: [Int32] = [60, 61]  // 60 = select previous source, 61 = select next source
-
-    /// Each system shortcut is live exactly when System Settings has it on and KeyboardTab
-    /// isn't handling it. (Only the live state changes; System Settings is never written.)
-    static func apply(enabledInSettings: Set<Int32>, takenOver: Set<Int32>) {
-        for id in ids {
-            CGSSetSymbolicHotKeyEnabled(id, enabledInSettings.contains(id) && !takenOver.contains(id))
-        }
-    }
-
-    /// On quit: back to exactly what System Settings says.
-    static func restore() {
-        let enabled = Set(AppSettings.detectSystemShortcuts().compactMap(\.hotkeyID))
-        apply(enabledInSettings: enabled, takenOver: [])
-    }
-}
-
 final class Switcher {
     private enum Mode {
         case none
@@ -39,6 +14,10 @@ final class Switcher {
     private var items: [InputSource] = []
     private var index = 0
     private var hideTimer: Timer?
+    private var tap: CFMachPort?
+
+    /// True once the keyboard hook runs (needs Accessibility access).
+    var isActive: Bool { tap != nil }
 
     // 🌐 Globe key: a quick tap switches layouts; holding it (e.g. Wispr Flow's hold-to-talk)
     // or using it with another key does not.
@@ -49,9 +28,6 @@ final class Switcher {
     private var globeDownEvent: CGEvent?
     private let globeHoldDelay = 0.3
     private static let syntheticMarker: Int64 = 0x4B54_4142  // marks events we re-post ourselves
-    private var tap: CFMachPort?
-    /// True once the keyboard hook runs (needs Accessibility access).
-    var isActive: Bool { tap != nil }
 
     // MARK: Event tap
 

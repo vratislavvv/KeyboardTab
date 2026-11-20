@@ -2,13 +2,11 @@ import Carbon
 import Foundation
 
 /// One selectable keyboard input source (layout or input-method mode).
-struct InputSource: Equatable {
+struct InputSource {
     let id: String
     let name: String
     let flag: String
     let ref: TISInputSource
-
-    static func == (a: InputSource, b: InputSource) -> Bool { a.id == b.id }
 
     func select() { TISSelectInputSource(ref) }
 }
@@ -54,10 +52,10 @@ enum Flags {
     /// Layout-name prefix → ISO country code. Longest prefix wins.
     /// Covers cases where the language alone is ambiguous (British vs U.S., Swiss, Canadian…).
     private static let layoutTable: [(String, String)] = [
-        ("USInternational", "US"), ("USExtended", "US"), ("US", "US"), ("ABC", "US"),
+        ("US", "US"), ("ABC", "US"),
         ("Colemak", "US"), ("Dvorak", "US"),
         ("British", "GB"), ("Irish", "IE"), ("Welsh", "GB"), ("Australian", "AU"),
-        ("Canadian", "CA"), ("CanadianFrench", "CA"),
+        ("Canadian", "CA"),
         ("Czech", "CZ"), ("Slovak", "SK"), ("Polish", "PL"), ("Hungarian", "HU"),
         ("German", "DE"), ("Austrian", "AT"), ("Swiss", "CH"),
         ("French", "FR"), ("Belgian", "BE"), ("Dutch", "NL"),
@@ -69,7 +67,7 @@ enum Flags {
         ("Ukrainian", "UA"), ("Belarusian", "BY"), ("Hebrew", "IL"), ("Arabic", "SA"),
         ("Persian", "IR"), ("Hindi", "IN"), ("Thai", "TH"), ("Vietnamese", "VN"),
         ("Korean", "KR"), ("Japanese", "JP"), ("Kazakh", "KZ"), ("Georgian", "GE"),
-        ("Armenian", "AM"), ("Maltese", "MT"), ("Mexican", "MX"), ("LatinAmerican", "MX"),
+        ("Armenian", "AM"), ("Maltese", "MT"), ("LatinAmerican", "MX"),
     ].sorted { $0.0.count > $1.0.count }
 
     static func flag(for ref: TISInputSource, id: String) -> String {
@@ -89,9 +87,11 @@ enum Flags {
         return "⌨️"
     }
 
+    /// "SK" → 🇸🇰: each letter maps to its Unicode "regional indicator" symbol.
     static func emoji(_ countryCode: String) -> String {
-        countryCode.uppercased().unicodeScalars
-            .compactMap { UnicodeScalar(127397 + $0.value) }
+        let regionalIndicatorA: UInt32 = 0x1F1E6
+        return countryCode.uppercased().unicodeScalars
+            .compactMap { UnicodeScalar(regionalIndicatorA + $0.value - 65) }
             .map(String.init).joined()
     }
 }

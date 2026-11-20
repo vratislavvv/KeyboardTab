@@ -4,8 +4,8 @@ import Combine
 
 /// A key combination that opens the switcher. `keyCode == -1` means the 🌐 Globe (fn) key.
 struct Shortcut: Codable, Hashable, Identifiable {
-    var keyCode: Int
-    var modifiers: UInt  // NSEvent.ModifierFlags raw value, limited to ⌃⌥⇧⌘
+    let keyCode: Int
+    let modifiers: UInt  // NSEvent.ModifierFlags raw value, limited to ⌃⌥⇧⌘
 
     static let relevant: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
     static let holdable: NSEvent.ModifierFlags = [.control, .option, .command]
@@ -31,12 +31,6 @@ struct Shortcut: Codable, Hashable, Identifiable {
         if flags.contains(.command) { s += "⌘" }
         return s + KeyNames.name(for: keyCode)
     }
-}
-
-/// A shortcut macOS itself has configured for switching input sources.
-struct SystemShortcut: Equatable {
-    let shortcut: Shortcut
-    let hotkeyID: Int32?  // symbolic-hotkey id (60/61), nil for the Globe key
 }
 
 /// User preferences, saved in UserDefaults.
@@ -100,50 +94,8 @@ final class AppSettings: ObservableObject {
 
     /// Re-reads macOS's shortcut configuration (cheap; called every few seconds).
     func refreshSystemShortcuts() {
-        let detected = AppSettings.detectSystemShortcuts()
+        let detected = InputSourceHotkeys.detect()
         if detected != systemShortcuts { systemShortcuts = detected }
-    }
-
-    /// Reads System Settings → Keyboard → Keyboard Shortcuts → Input Sources
-    /// and System Settings → Keyboard → "Press 🌐 key to".
-    static func detectSystemShortcuts() -> [SystemShortcut] {
-        let control = NSEvent.ModifierFlags.control.rawValue
-        let option = NSEvent.ModifierFlags.option.rawValue
-        let macDefaults: [(Int32, Shortcut)] = [
-            (60, Shortcut(keyCode: kVK_Space, modifiers: control)),           // select previous source
-            (61, Shortcut(keyCode: kVK_Space, modifiers: control | option)),  // select next source
-        ]
-        let hotkeys = readPreference("AppleSymbolicHotKeys", in: "com.apple.symbolichotkeys") as? [String: Any] ?? [:]
-
-        var result: [SystemShortcut] = []
-        for (id, fallback) in macDefaults {
-            // No entry = never customised = macOS default (enabled).
-            guard let entry = hotkeys[String(id)] as? [String: Any] else {
-                result.append(SystemShortcut(shortcut: fallback, hotkeyID: id))
-                continue
-            }
-            guard (entry["enabled"] as? Bool) ?? true else { continue }
-            if let value = entry["value"] as? [String: Any],
-               let p = value["parameters"] as? [Int], p.count == 3, p[1] != 65535 {
-                result.append(SystemShortcut(shortcut: Shortcut(keyCode: p[1], modifiers: UInt(p[2])), hotkeyID: id))
-            }
-        }
-        if globeSwitchesInputSource {
-            result.append(SystemShortcut(shortcut: .globe, hotkeyID: nil))
-        }
-        var seen = Set<Shortcut>()
-        return result.filter { seen.insert($0.shortcut).inserted }
-    }
-
-    /// macOS itself switches input sources on 🌐 (or did, before KeyboardTab took it over).
-    static var globeSwitchesInputSource: Bool {
-        GlobeKeySetting.current == GlobeKeySetting.changeInputSource
-            || GlobeKeySetting.valueBeforeTakeOver == GlobeKeySetting.changeInputSource
-    }
-
-    private static func readPreference(_ key: String, in domain: String) -> Any? {
-        CFPreferencesAppSynchronize(domain as CFString)
-        return CFPreferencesCopyAppValue(key as CFString, domain as CFString)
     }
 
     private func save(_ list: [Shortcut], _ key: String) {
@@ -155,51 +107,6 @@ final class AppSettings: ObservableObject {
         return (try? JSONDecoder().decode([Shortcut].self, from: data)) ?? []
     }
 }
-
-/// System Settings → Keyboard → "Press 🌐 key to".
-/// Uses HIToolbox's own (private) getter/setter, the same path System Settings takes,
-/// so changes apply immediately without a restart.
-enum GlobeKeySetting {
-    static let doNothing: Int32 = 0
-    static let changeInputSource: Int32 = 1  // 2 = Emoji & Symbols, 3 = Dictation
-
-    private static let savedKey = "globeSettingBeforeTakeOver"
-
-    static var current: Int32 { TISGetFnUsageType() }
-
-    /// What the setting was before KeyboardTab switched it to "Do Nothing" (nil = not taken over).
-    static var valueBeforeTakeOver: Int32? {
-        (UserDefaults.standard.object(forKey: savedKey) as? Int).map(Int32.init)
-    }
-
-    /// Stops macOS reacting to 🌐 so only KeyboardTab's panel appears.
-    static func takeOver() {
-        guard current != doNothing else { return }
-        if valueBeforeTakeOver == nil { UserDefaults.standard.set(Int(current), forKey: savedKey) }
-        set(doNothing)
-    }
-
-    /// Puts the setting back the way it was.
-    static func giveBack() {
-        guard let original = valueBeforeTakeOver else { return }
-        if current == doNothing { set(original) }  // don't override a change the user made meanwhile
-        UserDefaults.standard.removeObject(forKey: savedKey)
-    }
-
-    private static func set(_ value: Int32) {
-        let domain = "com.apple.HIToolbox" as CFString
-        CFPreferencesSetAppValue("AppleFnUsageType" as CFString, NSNumber(value: value), domain)
-        CFPreferencesAppSynchronize(domain)
-        TISUpdateFnUsageType(value)
-    }
-}
-
-@_silgen_name("TISGetFnUsageType")
-private func TISGetFnUsageType() -> Int32
-
-@_silgen_name("TISUpdateFnUsageType")
-@discardableResult
-private func TISUpdateFnUsageType(_ value: Int32) -> Int32
 
 enum KeyNames {
     static let functionKeys: [Int: String] = [

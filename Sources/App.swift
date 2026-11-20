@@ -7,8 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let switcher = Switcher()
     private let settingsWindow = SettingsWindowController()
     private var statusItem: NSStatusItem!
-    private var permissionTimer: Timer?
-    private var syncTimer: Timer?
     private var settingsObserver: AnyCancellable?
     private var signalSources: [DispatchSourceSignal] = []
 
@@ -24,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
             object: nil, suspensionBehavior: .deliverImmediately)
 
-        // macOS's own ⌃Space-style shortcuts are switched off while KeyboardTab handles them,
+        // macOS's own input-source shortcuts are switched off while KeyboardTab handles them,
         // so only one switcher appears. Re-applied whenever the shortcut list changes.
         let settings = AppSettings.shared
         applyTakeOver()
@@ -32,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async { self?.applyTakeOver() }
         }
         // Pick up changes made in System Settings (or by other apps) while running.
-        syncTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             settings.refreshSystemShortcuts()
         }
         // Quit cleanly (restoring macOS's shortcuts) when killed from Terminal / Activity Monitor.
@@ -56,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = AppSettings.shared
         // Without the keyboard hook KeyboardTab can't switch anything, so leave macOS's shortcuts alone.
         let takenOver = switcher.isActive ? Set(settings.takenOverSystemShortcuts.compactMap(\.hotkeyID)) : []
-        SystemShortcuts.apply(enabledInSettings: Set(settings.systemShortcuts.compactMap(\.hotkeyID)),
+        InputSourceHotkeys.apply(enabledInSettings: Set(settings.systemShortcuts.compactMap(\.hotkeyID)),
                               takenOver: takenOver)
         if switcher.isActive && settings.shortcuts.contains(.globe) {
             GlobeKeySetting.takeOver()
@@ -66,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ note: Notification) {
-        SystemShortcuts.restore()
+        InputSourceHotkeys.restore()
         GlobeKeySetting.giveBack()
     }
 
@@ -81,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startTapWhenTrusted() {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         if AXIsProcessTrustedWithOptions(opts), switcher.installTap() { applyTakeOver(); return }
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
+        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
             guard let self, AXIsProcessTrusted(), self.switcher.installTap() else { return }
             t.invalidate()
             self.applyTakeOver()
