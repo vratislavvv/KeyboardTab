@@ -18,7 +18,14 @@ echo "Built $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
   pkill -x KeyboardTab 2>/dev/null || true
+  # Let the old copy finish quitting (it restores macOS's settings) before starting the new one.
+  for _ in {1..20}; do pgrep -x KeyboardTab >/dev/null || break; sleep 0.25; done
   rm -rf /Applications/KeyboardTab.app
   cp -R "$APP" /Applications/
   echo "Installed to /Applications/KeyboardTab.app"
+  # Every build has a new signature, so macOS no longer honours the old Accessibility approval
+  # (it stays listed but silently doesn't work). Clear it so the app can ask again right away.
+  tccutil reset Accessibility local.keyboardtab >/dev/null 2>&1 || true
+  open /Applications/KeyboardTab.app
+  echo "Started KeyboardTab. Allow Accessibility access when asked."
 fi

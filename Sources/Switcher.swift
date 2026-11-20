@@ -177,10 +177,6 @@ final class Switcher {
             selectAndScheduleHide()
             return
         }
-        if settings.onlyWhenNoTextField && TextFocus.isTextInputFocused() {
-            switchSilently(step)
-            return
-        }
         if sc.isGlobe || sc.holdFlags.isEmpty {
             begin(.tap, step: step)
             selectAndScheduleHide()
@@ -196,13 +192,6 @@ final class Switcher {
         mode = newMode
         hideTimer?.invalidate()
         hud.show(items: items, selected: index)
-    }
-
-    /// Used while typing in a text field: switch straight away, no panel.
-    private func switchSilently(_ step: Int) {
-        items = InputSources.all()
-        guard items.count > 1 else { return }
-        items[wrap(currentIndex() + step)].select()
     }
 
     private func move(_ step: Int) {

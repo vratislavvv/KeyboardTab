@@ -93,14 +93,6 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("Switcher panel") {
-                Toggle("Show only when no text field is selected", isOn: $settings.onlyWhenNoTextField)
-                Text(settings.onlyWhenNoTextField
-                     ? "While you type in a text field, the layout switches instantly without the panel."
-                     : "The panel appears every time you switch.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
             Section("General") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in setLaunchAtLogin(on) }

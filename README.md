@@ -4,7 +4,6 @@ A macOS menu-bar app that replaces the system keyboard-layout switcher with a lo
 
 - Works with the shortcuts you already use (⌃Space, ⌃⌥Space, 🌐 Globe key), and you can add your own.
 - Flags are picked automatically, e.g. *Slovak – QWERTY* → 🇸🇰, *British* → 🇬🇧, *Finnish* → 🇫🇮.
-- Optionally stays out of the way while you type in a text field.
 
 Requires macOS 14 (Sonoma) or newer, on Apple Silicon or Intel.
 
@@ -32,19 +31,15 @@ cd KeyboardTab
 ./build.sh --install
 ```
 
-This builds the app and copies it to your **Applications** folder. It takes about a minute.
+This builds the app, copies it to your **Applications** folder and starts it. It takes about a minute.
 
 ### 3. Start it
 
-```sh
-open /Applications/KeyboardTab.app
-```
-
-You can also start it from Launchpad, Spotlight or the Applications folder, like any other app. KeyboardTab has no Dock icon. It lives in the menu bar as the flag of your current layout.
+The install step starts KeyboardTab for you. Later you can start it from Launchpad, Spotlight or the Applications folder, like any other app. KeyboardTab has no Dock icon. It lives in the menu bar as the flag of your current layout.
 
 ### 4. Give it Accessibility access
 
-The first time it starts, macOS asks for permission. KeyboardTab needs it to notice your switching shortcuts and to tell whether you're typing in a text field.
+The first time it starts, macOS asks for permission. KeyboardTab needs it to notice your switching shortcuts.
 
 1. Click **Open System Settings** in the prompt, or go to *System Settings → Privacy & Security → Accessibility*.
 2. Turn on **KeyboardTab**. If it isn't listed, click **+** and pick it from Applications.
@@ -73,10 +68,6 @@ The **Settings** window opens by itself the first time. Check that the shortcuts
 
 **From the menu bar:** click the flag and pick a layout.
 
-### While typing in a text field
-
-By default the panel only appears when you're **not** typing. Inside a text field, the shortcut switches the layout instantly without the panel, so it doesn't cover what you're writing. To always see the panel, turn this off in Settings.
-
 ### Opening Settings
 
 Click the menu-bar flag → **Settings…** (or press ⌘, while the menu is open). Opening KeyboardTab again from Launchpad or Spotlight while it's running also opens Settings.
@@ -92,10 +83,6 @@ Click the menu-bar flag → **Settings…** (or press ⌘, while the menu is ope
 - **Add Shortcut…** Click it, then press the key combination you want (Esc cancels). It must include ⌃, ⌥ or ⌘, or be an F-key, so normal typing is never blocked.
 - **Add 🌐 Globe Key.** Lets the Globe/fn key switch layouts even if macOS isn't set up for it.
 - **Reset.** Goes back to exactly the shortcuts macOS has, removing the ones you added.
-
-### Switcher panel
-
-- **Show only when no text field is selected.** On (default): no panel while you type in a text field. Off: the panel appears every time.
 
 ### General
 
@@ -115,10 +102,9 @@ Click the menu-bar flag → **Settings…** (or press ⌘, while the menu is ope
 cd KeyboardTab
 git pull
 ./build.sh --install
-open /Applications/KeyboardTab.app
 ```
 
-After an update, macOS treats KeyboardTab as a new app, so grant Accessibility access again. In *System Settings → Privacy & Security → Accessibility*, select the old **KeyboardTab** entry, click **−** to remove it, and allow the new one when asked.
+After an update, macOS treats KeyboardTab as a new app. `./build.sh --install` clears the old Accessibility approval and starts the app, so macOS asks once more. Allow it, as in step 4.
 
 ## Uninstalling
 
@@ -139,9 +125,6 @@ macOS is still reacting to the shortcut too. Make sure Accessibility access is g
 
 **After quitting or a crash, 🌐 no longer switches layouts.**
 If KeyboardTab was force-quit or crashed, the 🌐 key may still be on "Do Nothing". Start KeyboardTab and quit it normally, or set *"Press 🌐 key to"* back to *Change Input Source* in *System Settings → Keyboard*.
-
-**The panel appears even while I'm typing.**
-Some apps (certain Electron apps and games) don't tell macOS where their text fields are, so KeyboardTab can't detect them.
 
 **macOS says the app "can't be opened" after copying it from another Mac.**
 The app isn't notarized by Apple, which is why building it on each Mac (as above) is recommended. To open a copied app anyway, right-click it → **Open**, or run `xattr -dr com.apple.quarantine /Applications/KeyboardTab.app`.

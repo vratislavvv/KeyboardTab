@@ -51,16 +51,12 @@ final class AppSettings: ObservableObject {
     @Published private(set) var returnedToSystem: [Shortcut] {
         didSet { save(returnedToSystem, "returnedToSystem") }
     }
-    @Published var onlyWhenNoTextField: Bool {
-        didSet { defaults.set(onlyWhenNoTextField, forKey: "onlyWhenNoTextField") }
-    }
     /// True while the settings window is recording a new shortcut (the switcher stays quiet).
     @Published var isRecording = false
 
     private init() {
         customShortcuts = AppSettings.load("customShortcuts")
         returnedToSystem = AppSettings.load("returnedToSystem")
-        onlyWhenNoTextField = defaults.object(forKey: "onlyWhenNoTextField") as? Bool ?? true
         refreshSystemShortcuts()
     }
 
